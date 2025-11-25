@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>語文迷宮：形容詞大冒險</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #fce4ec; /* 柔和的粉色背景 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            touch-action: none; /* 防止手機滑動頁面 */
+        }
+
+        #ui-container {
+            width: 100%;
+            padding: 15px;
+            background: #fff;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .score-box {
+            color: #e91e63;
+        }
+
+        #message-area {
+            position: absolute;
+            top: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            white-space: nowrap;
+            z-index: 20;
+        }
+
+        #game-container {
+            flex: 1;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        svg {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        /* SVG 元素樣式 */
+        .wall {
+            stroke: #455a64;
+            stroke-width: 4;
+            stroke-linecap: round;
+            fill: none;
+        }
+
+        .player {
+            fill: #e91e63;
+            transition: cx 0.15s ease-out, cy 0.15s ease-out;
+        }
+
+        .goal {
+            fill: #4caf50;
+            opacity: 0.3;
+        }
+
+        .word-text {
+            font-size: 14px;
+            font-weight: bold;
+            fill: #555;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        .tutorial {
+            position: absolute;
+            bottom: 20px;
+            color: #666;
+            font-size: 0.9rem;
+            background: rgba(255,255,255,0.8);
+            padding: 5px 10px;
+            border-radius: 10px;
+            pointer-events: none;
+        }
+
+        /* 響應式調整 */
+        @media (max-width: 600px) {
+            .stats { font-size: 0.9rem; gap: 10px; }
+            #ui-container { padding: 10px; }
+            .word-text { font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div style="font-size: 1.2rem; font-weight: 800; color: #333;">語文迷宮</div>
+        <div class="stats">
+            <div class="score-box">分數: <span id="score">0</span></div>
+            <div>目標: 到達綠色終點</div>
+        </div>
+        <button onclick="resetGame()" style="padding: 5px 15px; border:none; background:#e91e63; color:white; border-radius:15px; cursor:pointer;">重置</button>
+    </div>
+
+    <div id="message-area">歡迎來到迷宮！收集形容詞！</div>
+
+    <div id="game-container">
+        <svg id="maze-svg" viewBox="0 0 600 600"></svg>
+        <div class="tutorial">電腦：方向鍵移動 | 手機：滑動螢幕</div>
+    </div>
+
+    <script>
+        // --- 遊戲設定 ---
+        const SVG_SIZE = 600;
+        const COLS = 10;
+        const ROWS = 10;
+        const CELL_SIZE = SVG_SIZE / COLS;
+        
+        // 詞彙庫
+        const ADJECTIVES = ['美麗', '快樂', '巨大', '聰明', '快速', '勇敢', '柔軟', '安靜', '整潔', '勤勞'];
+        const NON_ADJECTIVES = ['蘋果', '跑步', '桌子', '太陽', '喝水', '貓咪', '學校', '睡覺', '電腦', '唱歌'];
+
+        // --- 變數 ---
+        let grid = [];
+        let stack = [];
+        let player = { col: 0, row: 0 };
+        let items = {}; // 存儲地圖上的詞彙 { "x,y": {word: "...", type: "adj/noun"} }
+        let score = 0;
+        let isGameOver = false;
+
+        const svg = document.getElementById('maze-svg');
+        const scoreEl = document.getElementById('score');
+        const msgEl = document.getElementById('message-area');
+
+        // --- 迷宮生成算法 (Depth-First Search) ---
+        class Cell {
+            constructor(c, r) {
+                this.c = c;
+                this.r = r;
+                // walls: top, right, bottom, left
+                this.walls = [true, true, true, true];
+                this.visited = false;
+            }
+        }
+
+        function index(c, r) {
+            if (c < 0 || r < 0 || c >= COLS || r >= ROWS) return -1;
+            return c + r * COLS;
+        }
+
+        function generateMaze() {
+            grid = [];
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    grid.push(new Cell(c, r));
+                }
+            }
+
+            let current = grid[0];
+            current.visited = true;
+            stack.push(current);
+
+            while (stack.length > 0) {
+                // 1. 獲取當前格子的未訪問鄰居
+                let neighbors = [];
+                
+                let top = grid[index(current.c, current.r - 1)];
+                let right = grid[index(current.c + 1, current.r)];
+                let bottom = grid[index(current.c, current.r + 1)];
+                let left = grid[index(current.c - 1, current.r)];
+
+                if (top && !top.visited) neighbors.push(top);
+                if (right && !right.visited) neighbors.push(right);
+                if (bottom && !bottom.visited) neighbors.push(bottom);
+                if (left && !left.visited) neighbors.push(left);
+
+                if (neighbors.length > 0) {
+                    let next = neighbors[Math.floor(Math.random() * neighbors.length)];
+                    removeWalls(current, next);
+                    next.visited = true;
+                    stack.push(current);
+                    current = next;
+                } else {
+                    current = stack.pop();
+                }
+            }
+        }
+
+        function removeWalls(a, b) {
+            let x = a.c - b.c;
+            if (x === 1) { a.walls[3] = false; b.walls[1] = false; }
+            else if (x === -1) { a.walls[1] = false; b.walls[3] = false; }
+            
+            let y = a.r - b.r;
+            if (y === 1) { a.walls[0] = false; b.walls[2] = false; }
+            else if (y === -1) { a.walls[2] = false; b.walls[0] = false; }
+        }
+
+        // --- 放置物品 ---
+        function placeItems() {
+            items = {};
+            // 隨機選取一些詞彙
+            const totalItems = 12;
+            let placedCount = 0;
+
+            while (placedCount < totalItems) {
+                let c = Math.floor(Math.random() * COLS);
+                let r = Math.floor(Math.random() * ROWS);
+                let key = `${c},${r}`;
+
+                // 不要在起點(0,0)或終點(COLS-1, ROWS-1)放東西
+                if ((c===0 && r===0) || (c===COLS-1 && r===ROWS-1)) continue;
+                
+                if (!items[key]) {
+                    // 決定是形容詞還是非形容詞 (50% 機率)
+                    const isAdj = Math.random() > 0.4; // 稍微多一點形容詞
+                    const wordList = isAdj ? ADJECTIVES : NON_ADJECTIVES;
+                    const word = wordList[Math.floor(Math.random() * wordList.length)];
+                    
+                    items[key] = {
+                        word: word,
+                        type: isAdj ? 'adj' : 'noun',
+                        id: `item-${c}-${r}`
+                    };
+                    placedCount++;
+                }
+            }
+        }
+
+        // --- 渲染 ---
+        function drawMaze() {
+            svg.innerHTML = ''; // 清空
+
+            // 1. 繪製終點區域
+            const goalRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            goalRect.setAttribute("x", (COLS - 1) * CELL_SIZE);
+            goalRect.setAttribute("y", (ROWS - 1) * CELL_SIZE);
+            goalRect.setAttribute("width", CELL_SIZE);
+            goalRect.setAttribute("height", CELL_SIZE);
+            goalRect.setAttribute("class", "goal");
+            svg.appendChild(goalRect);
+
+            // 2. 繪製牆壁
+            grid.forEach(cell => {
+                const x = cell.c * CELL_SIZE;
+                const y = cell.r * CELL_SIZE;
+
+                // 每個格子畫線 (如果牆存在)
+                if (cell.walls[0]) drawLine(x, y, x + CELL_SIZE, y); // Top
+                if (cell.walls[1]) drawLine(x + CELL_SIZE, y, x + CELL_SIZE, y + CELL_SIZE); // Right
+                if (cell.walls[2]) drawLine(x + CELL_SIZE, y + CELL_SIZE, x, y + CELL_SIZE); // Bottom
+                if (cell.walls[3]) drawLine(x, y + CELL_SIZE, x, y); // Left
+            });
+
+            // 3. 繪製物品 (文字)
+            for (let key in items) {
+                const item = items[key];
+                const [c, r] = key.split(',').map(Number);
+                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                text.setAttribute("x", c * CELL_SIZE + CELL_SIZE/2);
+                text.setAttribute("y", r * CELL_SIZE + CELL_SIZE/2);
+                text.setAttribute("class", "word-text");
+                text.setAttribute("id", item.id);
+                text.textContent = item.word;
+                svg.appendChild(text);
+            }
+
+            // 4. 繪製玩家
+            const playerCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            playerCircle.setAttribute("id", "player");
+            playerCircle.setAttribute("cx", player.col * CELL_SIZE + CELL_SIZE/2);
+            playerCircle.setAttribute("cy", player.row * CELL_SIZE + CELL_SIZE/2);
+            playerCircle.setAttribute("r", CELL_SIZE * 0.3);
+            playerCircle.setAttribute("class", "player");
+            svg.appendChild(playerCircle);
+        }
+
+        function drawLine(x1, y1, x2, y2) {
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", x1);
+            line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2);
+            line.setAttribute("y2", y2);
+            line.setAttribute("class", "wall");
+            svg.appendChild(line);
+        }
+
+        function updatePlayerPos() {
+            const el = document.getElementById('player');
+            el.setAttribute("cx", player.col * CELL_SIZE + CELL_SIZE/2);
+            el.setAttribute("cy", player.row * CELL_SIZE + CELL_SIZE/2);
+        }
+
+        // --- 遊戲邏輯 ---
+        function showMessage(text, color) {
+            msgEl.textContent = text;
+            msgEl.style.color = color;
+            msgEl.style.opacity = 1;
+            
+            // 清除之前的 timeout
+            if (window.msgTimeout) clearTimeout(window.msgTimeout);
+            window.msgTimeout = setTimeout(() => {
+                msgEl.style.opacity = 0;
+            }, 2000);
+        }
+
+        function checkItem() {
+            const key = `${player.col},${player.row}`;
+            if (items[key]) {
+                const item = items[key];
+                const el = document.getElementById(item.id);
+                
+                if (item.type === 'adj') {
+                    score += 10;
+                    showMessage(`⭕ 好棒！「${item.word}」是形容詞！ (+10)`, '#2e7d32');
+                    el.style.fill = "#4caf50"; // 變綠
+                } else {
+                    score -= 5;
+                    showMessage(`❌ 哎呀...「${item.word}」不是形容詞 (-5)`, '#c62828');
+                    el.style.fill = "#c62828"; // 變紅
+                }
+                
+                // 視覺效果：文字放大後消失
+                // 簡單起見，直接移除或變淡
+                setTimeout(() => {
+                    if (el) el.remove();
+                }, 500);
+
+                scoreEl.innerText = score;
+                delete items[key]; // 移除紀錄
+            }
+
+            // 檢查是否到達終點
+            if (player.col === COLS - 1 && player.row === ROWS - 1) {
+                isGameOver = true;
+                setTimeout(() => {
+                    alert(`恭喜抵達終點！\n最終分數：${score}`);
+                    resetGame();
+                }, 200);
+            }
+        }
+
+        function move(dx, dy) {
+            if (isGameOver) return;
+
+            const currentCell = grid[index(player.col, player.row)];
+            // 檢查牆壁
+            // walls: [Top, Right, Bottom, Left]
+            // dy = -1 (Top), dx = 1 (Right), dy = 1 (Bottom), dx = -1 (Left)
+            
+            let blocked = false;
+            if (dy === -1 && currentCell.walls[0]) blocked = true;
+            if (dx === 1 && currentCell.walls[1]) blocked = true;
+            if (dy === 1 && currentCell.walls[2]) blocked = true;
+            if (dx === -1 && currentCell.walls[3]) blocked = true;
+
+            if (!blocked) {
+                player.col += dx;
+                player.row += dy;
+                updatePlayerPos();
+                checkItem();
+            }
+        }
+
+        function resetGame() {
+            player = { col: 0, row: 0 };
+            score = 0;
+            isGameOver = false;
+            scoreEl.innerText = "0";
+            msgEl.style.opacity = 0;
+            generateMaze();
+            placeItems();
+            drawMaze();
+        }
+
+        // --- 輸入控制 ---
+
+        // 鍵盤
+        window.addEventListener('keydown', (e) => {
+            switch(e.key) {
+                case 'ArrowUp': move(0, -1); break;
+                case 'ArrowRight': move(1, 0); break;
+                case 'ArrowDown': move(0, 1); break;
+                case 'ArrowLeft': move(-1, 0); break;
+            }
+        });
+
+        // 觸控滑動 (Swipe)
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+            touchStartY = e.changedTouches[0].screenY;
+        }, {passive: false});
+
+        document.addEventListener('touchend', (e) => {
+            let touchEndX = e.changedTouches[0].screenX;
+            let touchEndY = e.changedTouches[0].screenY;
+            
+            let dx = touchEndX - touchStartX;
+            let dy = touchEndY - touchStartY;
+
+            if (Math.abs(dx) > Math.abs(dy)) {
+                // 水平滑動
+                if (Math.abs(dx) > 30) { // 閾值
+                    if (dx > 0) move(1, 0);
+                    else move(-1, 0);
+                }
+            } else {
+                // 垂直滑動
+                if (Math.abs(dy) > 30) {
+                    if (dy > 0) move(0, 1);
+                    else move(0, -1);
+                }
+            }
+        }, {passive: false});
+
+        // 初始化
+        resetGame();
+
+    </script>
+</body>
+</html>
