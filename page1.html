@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVG 六角形互動角度計算</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px 25px;
+            border-radius: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            text-align: center;
+            z-index: 10;
+            pointer-events: none; /* 讓點擊穿透到 SVG */
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: #333;
+        }
+
+        p {
+            margin: 5px 0 0;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        svg {
+            width: 100%;
+            height: 100%;
+            touch-action: none; /* 防止觸控時捲動頁面 */
+        }
+
+        /* 六角形樣式 */
+        .hexagon-shape {
+            fill: rgba(66, 133, 244, 0.2);
+            stroke: #4285f4;
+            stroke-width: 3;
+            stroke-linejoin: round;
+        }
+
+        /* 控制點樣式 */
+        .vertex-handle {
+            fill: #fff;
+            stroke: #ea4335;
+            stroke-width: 3;
+            cursor: pointer;
+            transition: r 0.2s ease;
+        }
+        
+        .vertex-handle:hover {
+            r: 10;
+            fill: #ea4335;
+            stroke: #fff;
+        }
+
+        .vertex-handle.active {
+            fill: #ea4335;
+            stroke: #fff;
+            r: 12;
+            cursor: grabbing;
+        }
+
+        /* 角度文字樣式 */
+        .angle-text {
+            font-size: 14px;
+            font-weight: bold;
+            fill: #333;
+            user-select: none;
+            pointer-events: none;
+            text-anchor: middle;
+            text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;
+        }
+
+        /* 角度弧線樣式 */
+        .angle-arc {
+            fill: none;
+            stroke: rgba(0, 0, 0, 0.3);
+            stroke-width: 2;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <h1>互動式幾何：六角形</h1>
+        <p>拖動紅色頂點以改變形狀與角度</p>
+    </div>
+
+    <svg id="canvas">
+        <!-- 定義濾鏡或圖案如果需要 -->
+        
+        <!-- 主多邊形 -->
+        <polygon id="polygon" class="hexagon-shape" points=""></polygon>
+        
+        <!-- 角度弧線群組 -->
+        <g id="arcs-group"></g>
+
+        <!-- 角度文字群組 -->
+        <g id="labels-group"></g>
+
+        <!-- 控制點群組 -->
+        <g id="handles-group"></g>
+    </svg>
+
+    <script>
+        // --- 設定與初始化 ---
+        const svg = document.getElementById('canvas');
+        const polygon = document.getElementById('polygon');
+        const handlesGroup = document.getElementById('handles-group');
+        const labelsGroup = document.getElementById('labels-group');
+        const arcsGroup = document.getElementById('arcs-group');
+
+        let points = []; // 儲存 {x, y} 物件
+        let draggingIdx = -1; // 當前正在拖動的點索引
+
+        // 初始化六角形
+        function initHexagon() {
+            const centerX = window.innerWidth / 2;
+            const centerY = window.innerHeight / 2;
+            const radius = Math.min(window.innerWidth, window.innerHeight) * 0.3;
+
+            points = [];
+            for (let i = 0; i < 6; i++) {
+                // 從 -90度 (12點鐘方向) 開始
+                const angleDeg = 60 * i - 30;
+                const angleRad = (Math.PI / 180) * angleDeg;
+                points.push({
+                    x: centerX + radius * Math.cos(angleRad),
+                    y: centerY + radius * Math.sin(angleRad)
+                });
+            }
+            
+            render();
+        }
+
+        // --- 數學計算 ---
+
+        /**
+         * 計算三個點形成的角度 (B 為頂點)
+         * 使用 Math.atan2 獲得方向角，然後相減
+         */
+        function calculateAngle(pA, pB, pC) {
+            // 向量 BA
+            const angleBA = Math.atan2(pA.y - pB.y, pA.x - pB.x);
+            // 向量 BC
+            const angleBC = Math.atan2(pC.y - pB.y, pC.x - pB.x);
+
+            let angleDiff = angleBC - angleBA;
+            
+            // 轉換為角度
+            let deg = angleDiff * (180 / Math.PI);
+
+            // 確保角度在 0-360 之間的正值
+            if (deg < 0) deg += 360;
+
+            // 對於簡單多邊形，我們通常希望顯示內角。
+            // 這裡做一個簡單的假設：如果角度大於 180，則取 360 - deg (這取決於頂點順序)
+            // 由於我們的點是順時針生成的，atan2 的計算方向通常會得到我們想要的內角或外角。
+            // 為了讓使用者體驗更好，我們這裡顯示 <= 180 的角度 (幾何內角)，
+            // 除非形狀變成凹多邊形。但為了簡化顯示，我們統一顯示小於 180 的那個補角值
+            // 或者直接顯示計算出的值。
+            // 優化策略：始終顯示 0~360，但為了 UI 美觀，如果形狀沒自交，顯示內角。
+            
+            // 為了最直觀的交互，我們計算向量點積 (Cos) 來得到 0-180 的夾角
+            const v1 = { x: pA.x - pB.x, y: pA.y - pB.y };
+            const v2 = { x: pC.x - pB.x, y: pC.y - pB.y };
+            const dot = v1.x * v2.x + v1.y * v2.y;
+            const mag1 = Math.sqrt(v1.x * v1.x + v1.y * v1.y);
+            const mag2 = Math.sqrt(v2.x * v2.x + v2.y * v2.y);
+            
+            // 避免除以零
+            if (mag1 === 0 || mag2 === 0) return 0;
+
+            const cosTheta = Math.max(-1, Math.min(1, dot / (mag1 * mag2)));
+            const acosDeg = Math.acos(cosTheta) * (180 / Math.PI);
+            
+            return acosDeg;
+        }
+
+        /**
+         * 計算多邊形的幾何中心
+         */
+        function getCentroid(pts) {
+            let x = 0, y = 0;
+            pts.forEach(p => { x += p.x; y += p.y; });
+            return { x: x / pts.length, y: y / pts.length };
+        }
+
+        // --- 渲染邏輯 ---
+
+        function render() {
+            // 1. 更新多邊形路徑
+            const pointsStr = points.map(p => `${p.x},${p.y}`).join(' ');
+            polygon.setAttribute('points', pointsStr);
+
+            // 清空舊元素 (除了多邊形本身)
+            handlesGroup.innerHTML = '';
+            labelsGroup.innerHTML = '';
+            arcsGroup.innerHTML = '';
+
+            const centroid = getCentroid(points);
+
+            // 2. 繪製頂點、文字與角度弧線
+            points.forEach((p, i) => {
+                // 取得前後點索引 (循環)
+                const prevIdx = (i - 1 + 6) % 6;
+                const nextIdx = (i + 1) % 6;
+                const pPrev = points[prevIdx];
+                const pNext = points[nextIdx];
+
+                // 計算角度
+                const angleVal = calculateAngle(pPrev, p, pNext);
+
+                // -- 繪製圓點 (Handle) --
+                const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                circle.setAttribute("cx", p.x);
+                circle.setAttribute("cy", p.y);
+                circle.setAttribute("r", 8);
+                circle.setAttribute("class", `vertex-handle ${i === draggingIdx ? 'active' : ''}`);
+                circle.dataset.index = i; // 標記索引以便識別
+                
+                // 綁定事件 (Mouse & Touch)
+                circle.addEventListener('mousedown', handleStart);
+                circle.addEventListener('touchstart', handleStart, {passive: false});
+                
+                handlesGroup.appendChild(circle);
+
+                // -- 繪製文字 (Label) --
+                // 計算文字位置：往遠離幾何中心的方向偏移
+                // 向量 Center -> Point
+                let dx = p.x - centroid.x;
+                let dy = p.y - centroid.y;
+                const len = Math.sqrt(dx*dx + dy*dy);
+                // 單位向量 * 偏移量
+                const offset = 35; 
+                const textX = p.x + (dx / len) * offset;
+                const textY = p.y + (dy / len) * offset;
+
+                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                text.setAttribute("x", textX);
+                text.setAttribute("y", textY + 5); // 微調垂直居中
+                text.setAttribute("class", "angle-text");
+                text.textContent = `${Math.round(angleVal)}°`;
+                labelsGroup.appendChild(text);
+            });
+        }
+
+        // --- 交互事件處理 ---
+
+        function handleStart(e) {
+            e.preventDefault();
+            // 獲取被點擊圓圈的 index
+            draggingIdx = parseInt(e.target.dataset.index);
+            
+            // 標記 active 樣式
+            render();
+        }
+
+        function handleMove(e) {
+            if (draggingIdx === -1) return;
+            e.preventDefault();
+
+            // 獲取滑鼠/觸控位置
+            let clientX, clientY;
+            if (e.touches) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+
+            // 轉換為 SVG 座標 (如果 SVG 不是全螢幕或有邊距，這裡需要 getBoundingClientRect 計算 offset)
+            // 由於我們設定 SVG 為 100vw/100vh 且無 margin，直接用 clientXY 即可。
+            // 為了嚴謹，我們減去 SVG 的 offset
+            const rect = svg.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+
+            // 更新點座標
+            points[draggingIdx].x = x;
+            points[draggingIdx].y = y;
+
+            // 重新繪製
+            render();
+        }
+
+        function handleEnd() {
+            if (draggingIdx !== -1) {
+                draggingIdx = -1;
+                render(); // 移除 active 樣式
+            }
+        }
+
+        // 全域監聽移動與結束 (防止滑鼠移出圓點後失效)
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleEnd);
+        window.addEventListener('touchmove', handleMove, {passive: false});
+        window.addEventListener('touchend', handleEnd);
+
+        // 視窗大小改變時重置中心 (可選，這裡我們保持圖形位置不變，只重繪)
+        window.addEventListener('resize', () => {
+           // 可選擇是否要重新置中 initHexagon(); 
+           // 這裡暫時保留當前形狀
+        });
+
+        // 啟動
+        initHexagon();
+
+    </script>
+</body>
+</html>
